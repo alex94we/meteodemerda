@@ -10,8 +10,9 @@ if (!DISCORD_TOKEN || !CHANNEL_ID) {
   process.exit(1);
 }
 
-const CITIES_PER_EMBED = 16; // ~8 field da 2 città, resta larghi sotto il limite 6000 char/embed
+const CITIES_PER_EMBED = 25; // con 20 capoluoghi entra tutto in un unico messaggio
 const DISCORD_API = "https://discord.com/api/v10";
+const AUTH_HEADER = { Authorization: `Bot ${DISCORD_TOKEN}` };
 
 const WEATHER_CONCURRENCY = 10; // limita richieste simultanee a Open-Meteo per evitare fetch failed sporadici
 
@@ -72,7 +73,48 @@ async function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function getBotUserId() {
+  const res = await fetch(`${DISCORD_API}/users/@me`, { headers: AUTH_HEADER });
+  if (!res.ok) throw new Error(`Discord API ${res.status} su /users/@me`);
+  const me = await res.json();
+  return me.id;
+}
+
+async function fetchChannelMessages() {
+  const res = await fetch(`${DISCORD_API}/channels/${CHANNEL_ID}/messages?limit=100`, {
+    headers: AUTH_HEADER,
+  });
+  if (!res.ok) throw new Error(`Discord API ${res.status} su GET messages`);
+  return res.json();
+}
+
+async function deleteMessage(id) {
+  const res = await fetch(`${DISCORD_API}/channels/${CHANNEL_ID}/messages/${id}`, {
+    method: "DELETE",
+    headers: AUTH_HEADER,
+  });
+  if (!res.ok && res.status !== 404) {
+    console.error(`Errore cancellazione messaggio ${id}: ${res.status}`);
+  }
+}
+
+// Ripulisce il canale dai vecchi post del bot prima di mandarne uno nuovo,
+// così non si accumulano messaggi giorno dopo giorno. Cancellazione singola:
+// il bulk-delete richiederebbe il permesso Manage Messages che il bot non ha.
+async function cleanChannel() {
+  const botId = await getBotUserId();
+  const messages = await fetchChannelMessages();
+  const ownMessages = messages.filter((m) => m.author?.id === botId);
+  if (ownMessages.length === 0) return;
+
+  for (const m of ownMessages) {
+    await deleteMessage(m.id);
+  }
+  console.log(`Ripuliti ${ownMessages.length} messaggi precedenti.`);
+}
+
 async function main() {
+  await cleanChannel();
   const lines = await buildLines();
   const batches = chunk(lines, CITIES_PER_EMBED);
   const today = new Date().toLocaleDateString("it-IT", { weekday: "long", day: "numeric", month: "long" });
